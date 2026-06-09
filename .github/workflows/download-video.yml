@@ -25,7 +25,7 @@ jobs:
       - name: 检出当前仓库代码 (你的 fork)
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.branch }} # 允许你指定运行哪个分支的代码
+          ref: ${{ inputs.branch }}
 
       - name: 设置 Python 环境
         uses: actions/setup-python@v5
@@ -35,8 +35,8 @@ jobs:
       - name: 安装依赖项
         run: |
           python -m pip install --upgrade pip
-          # 安装 yt-dlp 源码目录下的 requirements.txt
-          pip install -r requirements.txt
+          # 修正：从当前目录安装，会自动读取 pyproject.toml 安装所需依赖
+          pip install .
           # 安装 ffmpeg，yt-dlp 依赖它来合并最佳视频和音频
           sudo apt-get update
           sudo apt-get install -y ffmpeg
@@ -46,12 +46,11 @@ jobs:
 
       - name: 执行下载 (使用本地源码)
         run: |
-          # 注意：这里使用 `python -m yt_dlp` 而不是 `yt-dlp` 命令
-          # 这样可以确保运行的是你当前 fork 仓库里的最新源码
+          # 使用 python -m yt_dlp 运行你 fork 仓库中的最新源码
           python -m yt_dlp -f "${{ inputs.format }}" "${{ inputs.video_url }}" \
             -o "downloads/%(title)s.%(ext)s" \
             --cookies "${{ secrets.YOUTUBE_COOKIES }}" \
-            --no-mtime # 可选：不保留原始文件的修改时间，避免某些文件系统警告
+            --no-mtime
 
       - name: 检查下载的文件
         run: ls -lh downloads/
@@ -61,5 +60,5 @@ jobs:
         with:
           name: youtube-downloads
           path: downloads/
-          retention-days: 3 # 3天后自动清理，防止超出 GitHub 免费存储限额
+          retention-days: 3
           if-no-files-found: error
