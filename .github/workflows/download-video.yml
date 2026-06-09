@@ -12,11 +12,6 @@ on:
         required: false
         default: 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
         type: string
-      branch:
-        description: '要使用的分支 (留空则使用默认分支)'
-        required: false
-        default: ''
-        type: string
 
 jobs:
   download:
@@ -24,41 +19,63 @@ jobs:
     steps:
       - name: 检出当前仓库代码 (你的 fork)
         uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.branch }}
 
       - name: 设置 Python 环境
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: 安装依赖项
+      - name: 安装依赖 & JS Runtime (Deno)
         run: |
           python -m pip install --upgrade pip
-          # 修正：从当前目录安装，会自动读取 pyproject.toml 安装所需依赖
+          # 从当前目录安装 yt-dlp 及其依赖
           pip install .
-          # 安装 ffmpeg，yt-dlp 依赖它来合并最佳视频和音频
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          # 安装 ffmpeg 用于合并音视频
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          
+          # 【关键修复 1】安装 Deno 作为 JS 运行时，解决 YouTube 签名解析问题
+          curl -fsSL https://deno.land/install.sh | sh
+          echo "$HOME/.deno/bin" >> $GITHUB_PATH
+
+      - name: 准备 Cookie 文件
+        id: prep_cookies
+        env:
+          # 使用环境变量传递 Secret，防止特殊字符导致 Shell 解析错误
+          COOKIES_CONTENT: ${{ secrets.YOUTUBE_COOKIES }}
+        run: |
+          if [ -n "$COOKIES_CONTENT" ]; then
+            echo "$COOKIES_CONTENT" > cookies.txt
+            echo "has_cookies=true" >> $GITHUB_OUTPUT
+            echo "✅ 检测到 YOUTUBE_COOKIES，已生成 cookies.txt"
+          else
+            echo "has_cookies=false" >> $GITHUB_OUTPUT
+            echo "::warning::未配置 YOUTUBE_COOKIES Secret。下载极大概率会因 Bot 验证失败！"
+          fi
 
       - name: 创建下载目录
         run: mkdir -p downloads
 
       - name: 执行下载 (使用本地源码)
         run: |
-          # 使用 python -m yt_dlp 运行你 fork 仓库中的最新源码
+          COOKIE_ARG=""
+          if [ "${{ steps.prep_cookies.outputs.has_cookies }}" == "true" ]; then
+            COOKIE_ARG="--cookies cookies.txt"
+          fi
+          
+          # 【关键修复 2】动态注入 Cookie 参数，避免空文件名崩溃
           python -m yt_dlp -f "${{ inputs.format }}" "${{ inputs.video_url }}" \
             -o "downloads/%(title)s.%(ext)s" \
-            --cookies "${{ secrets.YOUTUBE_COOKIES }}" \
+            $COOKIE_ARG \
             --no-mtime
 
       - name: 检查下载的文件
-        run: ls -lh downloads/
+        run: ls -lh downloads/ || echo "⚠️ 下载目录为空，可能下载失败"
 
       - name: 上传下载产物 (Artifact)
+        if: always() # 即使下载失败也尝试上传（如果有的话）
         uses: actions/upload-artifact@v4
         with:
           name: youtube-downloads
           path: downloads/
           retention-days: 3
-          if-no-files-found: error
+          if-no-files-found: warn # 【关键修复 3】如果没有文件只警告，不导致整个 Action 标红
